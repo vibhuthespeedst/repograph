@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY);
+CREATE TABLE audit_log (id TEXT);
+CREATE TABLE never_used (id TEXT);
