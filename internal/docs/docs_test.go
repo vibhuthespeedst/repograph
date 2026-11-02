@@ -177,6 +177,28 @@ func TestReplaceDiagram(t *testing.T) {
 	}
 }
 
+// A doc explaining the markers shows them in a code block, and that example must
+// stay as it is.
+func TestReplaceDiagramIgnoresMarkersInCodeBlocks(t *testing.T) {
+	example := "```markdown\n<!-- repograph:packages -->\n<!-- /repograph:packages -->\n```\n"
+	doc := "# How to\n\n" + example + "\nHere it is:\n\n<!-- repograph:packages -->\n<!-- /repograph:packages -->\n"
+	got, err := ReplaceDiagram(doc, "NEW")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# How to\n\n" + example + "\nHere it is:\n\n<!-- repograph:packages -->\nNEW\n<!-- /repograph:packages -->\n"
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestReplaceDiagramNeedsRealMarkers(t *testing.T) {
+	doc := "```markdown\n<!-- repograph:packages -->\n<!-- /repograph:packages -->\n```\n"
+	if _, err := ReplaceDiagram(doc, "NEW"); err == nil {
+		t.Error("markers that are only in a code block should not count")
+	}
+}
+
 func TestReplaceDiagramNeedsMarkers(t *testing.T) {
 	_, err := ReplaceDiagram("# No markers\n", "NEW")
 	if err == nil || !strings.Contains(err.Error(), "<!-- repograph:packages -->") {

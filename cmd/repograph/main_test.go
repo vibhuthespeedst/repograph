@@ -76,6 +76,25 @@ func TestImpactFollowsAPackageLevelTable(t *testing.T) {
 	wantContains(t, out, "store.validators", "POST", "/orders/{id}", "TestIsID")
 }
 
+func TestImpactWithoutRoutesLeavesOutTheRouteSection(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/plain\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := "package plain\n\nfunc A() { B() }\n\nfunc B() {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "plain.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runCLI(t, dir, "impact", "B")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	wantContains(t, out, "plain.A")
+	if strings.Contains(out, "Routes") {
+		t.Errorf("a repo with no routes shouldn't mention them:\n%s", out)
+	}
+}
+
 func TestCommandsWorkFromASubdirectory(t *testing.T) {
 	out, _, code := runCLI(t, filepath.Join(sampleCopy(t), "store"), "callers", "audit")
 	if code != 0 {
@@ -313,6 +332,63 @@ func TestAffectedCleansUpItsWorktree(t *testing.T) {
 	if strings.Contains(string(st), ".repograph") {
 		t.Errorf("the cache should not show up in git status:\n%s", st)
 	}
+}
+
+// A branch that started before main moved on must only report its own work, the way
+// git diff main... does, not the commits it hasn't picked up yet.
+func TestAffectedOnlyCountsTheBranchsOwnChanges(t *testing.T) {
+	dir := committedSample(t)
+	git(t, dir, "switch", "-q", "-c", "feature")
+	editAudit(t, dir)
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "feature work")
+
+	git(t, dir, "switch", "-q", "main")
+	f := filepath.Join(dir, "store", "store.go")
+	b, _ := os.ReadFile(f)
+	moved := strings.Replace(string(b), `return v != ""`, `return len(v) > 0`, 1)
+	if moved == string(b) {
+		t.Fatal("the edit to main did not apply")
+	}
+	if err := os.WriteFile(f, []byte(moved), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "main moves on")
+
+	git(t, dir, "switch", "-q", "feature")
+	out, errOut, code := runCLI(t, dir, "affected", "main")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	wantContains(t, out, "(*store.DB).audit")
+	if strings.Contains(out, "store.isID") {
+		t.Errorf("store.isID only changed on main, not on this branch:\n%s", out)
+	}
+}
+
+func TestAffectedIgnoresRemovedTests(t *testing.T) {
+	dir := committedSample(t)
+	if err := os.Remove(filepath.Join(dir, "store", "store_test.go")); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ := runCLI(t, dir, "affected", "HEAD")
+	wantContains(t, out, "No code changes")
+}
+
+func TestAffectedListsRemovedProductionCode(t *testing.T) {
+	dir := committedSample(t)
+	f := filepath.Join(dir, "store", "store.go")
+	b, _ := os.ReadFile(f)
+	gone := strings.Replace(string(b), "func unused() { _ = upper(nil) }\n", "", 1)
+	if gone == string(b) {
+		t.Fatal("the edit did not apply")
+	}
+	if err := os.WriteFile(f, []byte(gone), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ := runCLI(t, dir, "affected", "HEAD")
+	wantContains(t, out, "Removed (1)", "store.unused")
 }
 
 func TestAffectedWithABadRef(t *testing.T) {

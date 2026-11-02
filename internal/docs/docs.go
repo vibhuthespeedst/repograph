@@ -231,11 +231,23 @@ const (
 	endMarker   = "<!-- /repograph:packages -->"
 )
 
-// ReplaceDiagram puts the diagram between the markers in a Markdown document.
+// ReplaceDiagram puts the diagram between the markers in a Markdown document. Markers
+// inside a code block don't count, so a doc can show them as an example.
 func ReplaceDiagram(doc, diagram string) (string, error) {
-	start := strings.Index(doc, startMarker)
-	end := strings.Index(doc, endMarker)
-	if start < 0 || end < start {
+	start, end, offset := -1, -1, 0
+	inFence := false
+	for _, line := range strings.SplitAfter(doc, "\n") {
+		switch trimmed := strings.TrimSpace(line); {
+		case strings.HasPrefix(trimmed, "```"):
+			inFence = !inFence
+		case !inFence && trimmed == startMarker && start < 0:
+			start = offset
+		case !inFence && trimmed == endMarker && start >= 0 && end < 0:
+			end = offset
+		}
+		offset += len(line)
+	}
+	if start < 0 || end < 0 {
 		return "", fmt.Errorf("add these two lines where the diagram should go:\n%s\n%s", startMarker, endMarker)
 	}
 	return doc[:start] + startMarker + "\n" + diagram + "\n" + doc[end:], nil

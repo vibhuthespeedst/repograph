@@ -403,6 +403,17 @@ func Diff(a, b *Graph) Changes {
 	return c
 }
 
+// RemovedProductionCode lists removed functions, leaving test code out.
+func (c Changes) RemovedProductionCode(before *Index) []string {
+	var out []string
+	for _, id := range c.FuncsRemoved {
+		if !before.isTest(id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // ChangedProductionCode lists the changed and added functions in the new graph,
 // leaving test code out. Removed functions aren't listed: their callers had to
 // change too, so those callers already are.

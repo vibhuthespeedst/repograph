@@ -24,12 +24,17 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Build returns the graph of the module at root as it was at ref. The worktree goes
-// inside the cache directory, which Go and git both ignore, and is removed afterwards.
+// Build returns the graph of the module at root as it was where the current branch
+// left ref, like git diff ref... does, so commits ref gained afterwards aren't
+// mistaken for this branch's work. The worktree goes inside the cache directory,
+// which Go and git both ignore, and is removed afterwards.
 func Build(root, ref string, tags []string) (*graph.Graph, []string, error) {
 	sha, err := git(root, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 	if err != nil {
 		return nil, nil, fmt.Errorf("%q isn't a commit or branch in this repository", ref)
+	}
+	if base, err := git(root, "merge-base", "HEAD", sha); err == nil {
+		sha = base
 	}
 	top, err := git(root, "rev-parse", "--show-toplevel")
 	if err != nil {

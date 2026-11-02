@@ -167,11 +167,14 @@ func printRoutes(rs []graph.Route) {
 }
 
 func printImpact(ix *graph.Index, im graph.Impact) {
-	fmt.Printf("Routes that can be affected (%d of %d):\n", len(im.Routes), im.TotalRoutes)
-	if len(im.Routes) == 0 {
-		fmt.Println("  none")
+	if im.TotalRoutes > 0 {
+		fmt.Printf("Routes that can be affected (%d of %d):\n", len(im.Routes), im.TotalRoutes)
+		if len(im.Routes) == 0 {
+			fmt.Println("  none")
+		}
+		printRoutes(im.Routes)
+		fmt.Println()
 	}
-	printRoutes(im.Routes)
 
 	pkgs := map[string]int{}
 	for _, id := range im.Reaching {
@@ -186,7 +189,7 @@ func printImpact(ix *graph.Index, im graph.Impact) {
 	for _, p := range names {
 		parts = append(parts, fmt.Sprintf("%s (%d)", p, pkgs[p]))
 	}
-	fmt.Printf("\nFunctions that can reach this: %d", len(im.Reaching))
+	fmt.Printf("Functions that can reach this: %d", len(im.Reaching))
 	if len(parts) > 0 {
 		fmt.Printf(", in %s", strings.Join(parts, ", "))
 	}
@@ -394,43 +397,45 @@ func (s *session) warn(warnings []string) {
 	}
 }
 
-// changesSince compares ref with the code as it is now, uncommitted work included.
-func (s *session) changesSince(ref string) (*graph.Index, graph.Changes, error) {
-	before, warnings, err := gitref.Build(s.root, ref, s.tags)
+// changesSince compares where this branch left ref with the code as it is now,
+// uncommitted work included. It returns the graph before and after the changes.
+func (s *session) changesSince(ref string) (before, after *graph.Index, c graph.Changes, err error) {
+	old, warnings, err := gitref.Build(s.root, ref, s.tags)
 	if err != nil {
-		return nil, graph.Changes{}, err
+		return nil, nil, c, err
 	}
 	s.warn(warnings)
-	ix, err := s.index()
+	after, err = s.index()
 	if err != nil {
-		return nil, graph.Changes{}, err
+		return nil, nil, c, err
 	}
-	return ix, graph.Diff(before, ix.Graph), nil
+	return graph.NewIndex(old), after, graph.Diff(old, after.Graph), nil
 }
 
 func (s *session) cmdAffected(rest []string) error {
-	ix, c, err := s.changesSince(rest[1])
+	before, ix, c, err := s.changesSince(rest[1])
 	if err != nil {
 		return err
 	}
 	changed := c.ChangedProductionCode(ix)
+	removed := c.RemovedProductionCode(before)
 	im := ix.Impact(changed)
 	if s.asJSON {
 		return s.printJSON(struct {
 			Changed []string     `json:"changed"`
 			Removed []string     `json:"removed,omitempty"`
 			Impact  graph.Impact `json:"impact"`
-		}{changed, c.FuncsRemoved, im})
+		}{changed, removed, im})
 	}
-	if len(changed) == 0 && len(c.FuncsRemoved) == 0 {
+	if len(changed) == 0 && len(removed) == 0 {
 		fmt.Printf("No code changes since %s, so nothing is affected. Test-only and comment-only edits don't count.\n", rest[1])
 		return nil
 	}
 	fmt.Printf("Changed since %s (%d):\n", rest[1], len(changed))
 	printFuncs(ix, changed)
-	if len(c.FuncsRemoved) > 0 {
-		fmt.Printf("\nRemoved (%d):\n", len(c.FuncsRemoved))
-		for _, id := range c.FuncsRemoved {
+	if len(removed) > 0 {
+		fmt.Printf("\nRemoved (%d):\n", len(removed))
+		for _, id := range removed {
 			fmt.Printf("  %s\n", id)
 		}
 	}
@@ -454,7 +459,7 @@ func (s *session) cmdDiff(rest []string) error {
 		ix, c = graph.NewIndex(b), graph.Diff(a, b)
 	} else {
 		var err error
-		ix, c, err = s.changesSince(rest[1])
+		_, ix, c, err = s.changesSince(rest[1])
 		if err != nil {
 			return err
 		}
