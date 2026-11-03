@@ -22,6 +22,10 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		panic(string(out))
 	}
+	// Keep the commands' caches out of the real user cache directory.
+	if err := os.Setenv("REPOGRAPH_CACHE_DIR", filepath.Join(dir, "cache")); err != nil {
+		panic(err)
+	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

@@ -65,7 +65,7 @@ Both compare against where your branch left `<ref>`, like `git diff main...`, an
 Everything in the graph comes from the source, so nothing is maintained by hand.
 
 - **Questions:** each one hashes your Go and SQL files and rebuilds if anything changed. A cached question takes about 50 ms, and a rebuild took seconds on a 1,100-function repo.
-- **The cache:** it lives in `.repograph/` in your repo and ignores itself in git, so it never shows up in `git status`.
+- **The cache:** it lives in your user cache folder, one per repo, and never inside the repo, so it never shows up in `git status` and a repo can't tamper with it. Set `REPOGRAPH_CACHE_DIR` to keep it somewhere else.
 - **Hand-written docs:** `repograph docs` fails if a doc mentions a function or path that no longer exists.
 - **Diagrams:** `repograph diagram` generates the package diagram, so it can't drift.
 
@@ -100,7 +100,7 @@ flowchart LR
     cache --> extract & graph_["graph"]
     docs --> extract & graph_["graph"]
     extract --> graph_["graph"]
-    gitref --> cache & extract & graph_["graph"]
+    gitref --> extract & graph_["graph"]
 ```
 <!-- /repograph:packages -->
 
@@ -116,6 +116,7 @@ An arrow means "imports". Commands are left out, because they import most packag
 - **Tables are found by matching text.** A string has to name the table after a SQL keyword or be exactly its name, and the table needs a `CREATE TABLE` in a `.sql` file. Names built at runtime are missed.
 - **`docs` checks that a name exists in the code,** comments included, not that what the doc says about it is still true.
 - **One module at a time.** For a repo with several, use `-C` for each.
+- **It trusts the code as much as `go build` does.** Reading a module runs `go list`, which compiles it. Only run it on code you would build.
 
 ## Why not gopls?
 

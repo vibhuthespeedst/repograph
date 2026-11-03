@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vibhuthespeedst/repograph/internal/cache"
 	"github.com/vibhuthespeedst/repograph/internal/extract"
 	"github.com/vibhuthespeedst/repograph/internal/graph"
 )
@@ -26,8 +25,8 @@ func git(dir string, args ...string) (string, error) {
 
 // Build returns the graph of the module at root as it was where the current branch
 // left ref, like git diff ref... does, so commits ref gained afterwards aren't
-// mistaken for this branch's work. The worktree goes inside the cache directory,
-// which Go and git both ignore, and is removed afterwards.
+// mistaken for this branch's work. The worktree goes in a new temporary directory
+// outside the repository and is removed afterwards.
 func Build(root, ref string, tags []string) (*graph.Graph, []string, error) {
 	sha, err := git(root, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 	if err != nil {
@@ -53,11 +52,12 @@ func Build(root, ref string, tags []string) (*graph.Graph, []string, error) {
 		return nil, nil, err
 	}
 
-	dir, err := cache.Ensure(root)
+	tmp, err := os.MkdirTemp("", "repograph-")
 	if err != nil {
 		return nil, nil, err
 	}
-	tree := filepath.Join(dir, fmt.Sprintf("worktree-%d", os.Getpid()))
+	tree := filepath.Join(tmp, "tree")
+	defer func() { _ = os.RemoveAll(tmp) }()
 	if _, err := git(root, "worktree", "add", "--quiet", "--detach", tree, sha); err != nil {
 		return nil, nil, err
 	}

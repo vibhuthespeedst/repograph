@@ -1,16 +1,19 @@
-// Package cache keeps a built graph next to the code and rebuilds it only when the
-// code has changed, so every question is answered from current source with no
-// rebuild step to remember.
+// Package cache keeps a built graph and rebuilds it only when the code has changed,
+// so every question is answered from current source with no rebuild step to remember.
+//
+// The cache lives in the user cache directory, never inside the repository. A cloned
+// repo can commit any file, including a fake cache or a link pointing outside the
+// repo, so nothing in the repo is read or written as cache.
 package cache
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -18,8 +21,9 @@ import (
 	"github.com/vibhuthespeedst/repograph/internal/graph"
 )
 
-// Dir is the cache directory inside a repository. It ignores itself in git.
-const Dir = ".repograph"
+// EnvDir names an environment variable that, when set, replaces the user cache
+// directory as the place caches are kept.
+const EnvDir = "REPOGRAPH_CACHE_DIR"
 
 // Result is a graph and how it was obtained.
 type Result struct {
@@ -44,6 +48,32 @@ func FindRoot(dir string) (string, error) {
 		}
 		cur = parent
 	}
+}
+
+// paths returns where the graph and its fingerprint are kept for the module at root:
+// a directory per module, named by a hash of its location.
+func paths(root string) (graphPath, stampPath string, err error) {
+	base := os.Getenv(EnvDir)
+	if base == "" {
+		userCache, err := os.UserCacheDir()
+		if err != nil {
+			return "", "", err
+		}
+		base = filepath.Join(userCache, "repograph")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	if runtime.GOOS == "windows" {
+		abs = strings.ToLower(abs) // E:\x and e:\x are the same folder
+	}
+	sum := sha256.Sum256([]byte(abs))
+	dir := filepath.Join(base, hex.EncodeToString(sum[:8]))
+	return filepath.Join(dir, "graph.json"), filepath.Join(dir, "fingerprint"), nil
 }
 
 // fingerprint covers everything the graph is built from: the Go and SQL files, the
@@ -89,34 +119,47 @@ func fingerprint(root string, tags []string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Ensure creates the cache directory, set to ignore itself.
-func Ensure(root string) (string, error) {
-	dir := filepath.Join(root, Dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+// save writes the graph and then its fingerprint, each to a temporary file renamed
+// into place, so a crash or a second run can't leave a fingerprint naming a graph
+// that was never fully written.
+func save(g *graph.Graph, graphPath, stampPath, stamp string) error {
+	if err := os.MkdirAll(filepath.Dir(graphPath), 0o700); err != nil {
+		return err
 	}
-	ignore := filepath.Join(dir, ".gitignore")
-	if _, err := os.Stat(ignore); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(ignore, []byte("*\n"), 0o644); err != nil {
-			return "", err
-		}
+	tmp := fmt.Sprintf("%s.%d.tmp", graphPath, os.Getpid())
+	if err := g.Save(tmp); err != nil {
+		return err
 	}
-	return dir, nil
+	if err := os.Rename(tmp, graphPath); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	tmp = fmt.Sprintf("%s.%d.tmp", stampPath, os.Getpid())
+	if err := os.WriteFile(tmp, []byte(stamp), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, stampPath); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // Load returns the graph for the module at root, rebuilding it if the code changed.
-// Failing to write the cache doesn't fail the question, and a partial graph from
-// broken code isn't cached, so its warnings show on every run until the code is fixed.
+// Failing to read or write the cache doesn't fail the question, and a partial graph
+// from broken code isn't cached, so its warnings show on every run until the code
+// is fixed.
 func Load(root string, tags []string) (Result, error) {
 	want, err := fingerprint(root, tags)
 	if err != nil {
 		return Result{}, err
 	}
-	graphPath := filepath.Join(root, Dir, "graph.json")
-	stampPath := filepath.Join(root, Dir, "fingerprint")
-	if got, err := os.ReadFile(stampPath); err == nil && string(got) == want {
-		if g, err := graph.Load(graphPath); err == nil {
-			return Result{Graph: g}, nil
+	graphPath, stampPath, pathErr := paths(root)
+	if pathErr == nil {
+		if got, err := os.ReadFile(stampPath); err == nil && string(got) == want {
+			if g, err := graph.Load(graphPath); err == nil {
+				return Result{Graph: g}, nil
+			}
 		}
 	}
 
@@ -124,12 +167,8 @@ func Load(root string, tags []string) (Result, error) {
 	if err != nil {
 		return Result{Warnings: warnings}, err
 	}
-	if len(warnings) == 0 {
-		if _, err := Ensure(root); err == nil {
-			if err := g.Save(graphPath); err == nil {
-				_ = os.WriteFile(stampPath, []byte(want), 0o644)
-			}
-		}
+	if len(warnings) == 0 && pathErr == nil {
+		_ = save(g, graphPath, stampPath, want)
 	}
 	return Result{Graph: g, Rebuilt: true, Warnings: warnings}, nil
 }
